@@ -1,31 +1,60 @@
-FROM snyk/ubuntu as base
+ARG NODEJS_VERSION=16.15.0
+ARG NODEJS_MAJOR_VERSION=16
 
-MAINTAINER Snyk Ltd
+# --------------------------------------------------------
+# 1) Node JS & broker Installation
+# --------------------------------------------------------
+FROM registry.access.redhat.com/ubi8/ubi:8.6 as base
 
-USER root
+ARG NODEJS_VERSION
+ARG NODEJS_MAJOR_VERSION
 
-RUN apt update && apt install -y make python gcc
+# Download and extract Node
+WORKDIR /tmp
+RUN curl -o "/tmp/node-v${NODEJS_VERSION}-linux-x64.tar.gz" "https://nodejs.org/dist/v${NODEJS_VERSION}/node-v${NODEJS_VERSION}-linux-x64.tar.gz"
+RUN tar xvf "/tmp/node-v${NODEJS_VERSION}-linux-x64.tar.gz"
 
-RUN apt-get update && apt-get install -y ca-certificates
+
+# Install npm for the snyk-broker installation
+RUN dnf module enable -y nodejs:${NODEJS_MAJOR_VERSION}
+RUN yum install -y npm
+
+# Install CA certificates
+RUN yum install ca-certificates
 
 ENV NPM_CONFIG_PREFIX=/home/node/.npm-global
-
 ENV PATH=$PATH:/home/node/.npm-global/bin
 
+# Globally install snyk-broker
 RUN npm install --global snyk-broker
 
+# --------------------------------------------------------
+# 2) Setting final image with Node and broker binary files
+# --------------------------------------------------------
 
+FROM registry.access.redhat.com/ubi8/ubi:8.6
 
-FROM snyk/ubuntu
+ARG NODEJS_VERSION
 
 ENV PATH=$PATH:/home/node/.npm-global/bin
 
+# Copy the broker installation and CA certificates
 COPY --from=base /home/node/.npm-global /home/node/.npm-global
+COPY --from=base /etc/pki/tls/certs/ca-bundle.crt /etc/pki/tls/certs/ca-bundle.crt
 
-COPY --from=base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# Copy node binary and set path
+COPY --from=base "/tmp/node-v${NODEJS_VERSION}-linux-x64/bin/node" "/usr/node-v${NODEJS_VERSION}-linux-x64/bin/"
+ENV PATH=/usr/node-v${NODEJS_VERSION}-linux-x64/bin:${PATH}
+
+# Adding the node user
+RUN groupadd --gid 1000 node \
+  && useradd --uid 1000 --gid node --shell /bin/bash --create-home node
+
+RUN chown node:node /home/node
+
+WORKDIR /home/node
 
 # Don't run as root
-WORKDIR /home/node
 USER node
 
 # Generate default accept filter
